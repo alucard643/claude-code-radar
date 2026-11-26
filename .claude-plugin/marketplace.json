@@ -1,5 +1,5 @@
 {
-  "name": "local-mods",
+  "name": "claude-code-radar",
   "owner": { "name": "local" },
   "plugins": [{ "name": "radar", "source": "./radar", "description": "Sidebar: animated agent graph, live tasks/tools with progress and model, and a tree of the files read, edited or created" }]
 }

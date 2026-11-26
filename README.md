@@ -30,8 +30,8 @@ Controls: fold either box, a button that cycles three height presets, scroll but
 ## Install
 
 ```
-/plugin marketplace add GITHUB_USER/REPO_NAME
-/plugin install radar@MARKETPLACE_NAME
+/plugin marketplace add alucard643/claude-code-radar
+/plugin install radar@claude-code-radar
 ```
 
 Then restart Claude Code.
@@ -99,8 +99,8 @@ Controles: plegar cualquiera de las dos cajas, un botón que alterna tres altura
 ## Instalación
 
 ```
-/plugin marketplace add GITHUB_USER/REPO_NAME
-/plugin install radar@MARKETPLACE_NAME
+/plugin marketplace add alucard643/claude-code-radar
+/plugin install radar@claude-code-radar
 ```
 
 Después reinicia Claude Code.
