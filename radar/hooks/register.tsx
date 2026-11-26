@@ -5,35 +5,38 @@ import type { RadarAgent, RadarCall, RadarDiffs, RadarFile, RadarTask } from '..
 import { ACCENT, ACCENT_HI, BG, boardSvg, DIM, HAIR, SILK, SUB } from './board'
 import { pretty } from './model-name'
 import { planCells, planSvg, SEG_COLOR } from './plan'
+import { agentName, type Lang, type Strings, t } from './i18n'
 import { ERR, esc, groupAgents, KIND_COLOR, short, STATIONS } from './shared'
 
 const PANE = 'radar'
 const TITLE = 'Radar'
-const MAIN = 'principal'
+const MAIN = 'main'
 
 const agents = atom({ plugin: 'radar', key: 'agents' } as const, [] as RadarAgent[], { shape: 'agents-1' })
 const tasks = atom({ plugin: 'radar', key: 'tasks' } as const, [] as RadarTask[], { shape: 'tasks-1' })
 // shortcut: usage counts come from the last 120 calls only; keep a counter atom if whole-session totals matter.
 const calls = atom({ plugin: 'radar', key: 'calls' } as const, [] as RadarCall[], { shape: 'calls-2' })
 const files = atom({ plugin: 'radar', key: 'files' } as const, [] as RadarFile[], { shape: 'files-1' })
-// procs/files/det/tasks: first row shown; tasksFor: 'cur:<task>' the user scrolled Tareas under, else auto-follow; mark: newest call id when Procesos was scrolled away from the top.
+// procs/files/det/tasks: first row shown; tasksFor: 'cur:<task>' the user scrolled Tasks under, else auto-follow; mark: newest call id when Calls was scrolled away from the top.
 const scroll = atom({ plugin: 'radar', key: 'scroll' } as const, { procs: 0, files: 0, det: 0, mark: '', tasks: 0, tasksFor: '' }, { shape: 'scroll-3' })
 // Last model each loop asked, keyed by agentId ('main' for the main loop).
 const models = atom({ plugin: 'radar', key: 'models' } as const, {} as Record<string, string>, { shape: 'models-1' })
 const diffs = atom({ plugin: 'radar', key: 'diffs' } as const, {} as RadarDiffs, { shape: 'diffs-1' })
-// File whose diff the Archivos box shows; '' shows the tree.
+// File whose diff the Files box shows; '' shows the tree.
 const open = atom({ plugin: 'radar', key: 'open' } as const, { path: '' }, { shape: 'open-1' })
-// Which drawing the Agentes box shows on graphic surfaces.
+// Which drawing the Agents box shows on graphic surfaces.
 const view = atom({ plugin: 'radar', key: 'view' } as const, { graph: 'board' as 'board' | 'radar' }, { shape: 'view-1' })
 
 // Folded boxes show only their header row.
 const fold = atom({ plugin: 'radar', key: 'fold' } as const, { graph: false, tabs: false }, { shape: 'fold-3' })
-// Calls whose detail Procesos shows, latest first; [] shows the feed.
+// Calls whose detail Calls shows, latest first; [] shows the feed.
 const pick = atom({ plugin: 'radar', key: 'pick' } as const, { ids: [] as string[] }, { shape: 'pick-1' })
 // agent '' = every agent.
 const filter = atom({ plugin: 'radar', key: 'filter' } as const, { errors: false, agent: '' }, { shape: 'filter-1' })
 // When the current plan task became current.
 const since = atom({ plugin: 'radar', key: 'since' } as const, { content: '', at: 0 }, { shape: 'since-1' })
+// UI language; the stored choice ($.store 'lang') is loaded at session.start. Defaults to English.
+const lang = atom({ plugin: 'radar', key: 'lang' } as const, { l: 'en' as Lang }, { shape: 'lang-1' })
 // Tab the lower box shows.
 type Tab = 'tasks' | 'procs' | 'files'
 const TABS: readonly Tab[] = ['tasks', 'procs', 'files']
@@ -127,7 +130,7 @@ function touch(list: RadarFile[], path: string, op: RadarFile['op']): RadarFile[
 }
 
 // ---------- section 1: animated agent graph (SVG + SMIL) ----------
-function graphSvg(list: RadarAgent[], cls: RadarCall[], mainModel: string): string {
+export function graphSvg(list: RadarAgent[], cls: RadarCall[], mainModel: string, s: Strings): string {
   const W = 400, H = 330, cx = 200, cy = 158, RA = 74, RS = 128
   const live = cls.filter(c => c.status === 'run')
   const p: string[] = []
@@ -160,7 +163,7 @@ function graphSvg(list: RadarAgent[], cls: RadarCall[], mainModel: string): stri
     p.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="8" fill="${n ? col : '#1e293b'}" stroke="${col}"/>`)
     const below = y > cy + 5
     const ly = y + (below ? 22 : -13)
-    p.push(`<text x="${x.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" font-size="13" fill="${n ? '#e2e8f0' : '#64748b'}" font-family="sans-serif">${esc(st.label)}${running > 1 ? ` ×${running}` : n ? ` ${n}` : ''}</text>`)
+    p.push(`<text x="${x.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" font-size="13" fill="${n ? '#e2e8f0' : '#64748b'}" font-family="sans-serif">${esc(s.station[st.kind])}${running > 1 ? ` ×${running}` : n ? ` ${n}` : ''}</text>`)
     if (errs) p.push(`<circle cx="${(x + 9).toFixed(1)}" cy="${(y - 8).toFixed(1)}" r="7" fill="${ERR}"/><text x="${(x + 9).toFixed(1)}" y="${(y - 4.5).toFixed(1)}" text-anchor="middle" font-size="10" fill="#fff" font-family="sans-serif">${errs}</text>`)
   })
 
@@ -192,12 +195,12 @@ function graphSvg(list: RadarAgent[], cls: RadarCall[], mainModel: string): stri
 <circle cx="${cx}" cy="${cy}" r="46" fill="none" stroke="${ACCENT_HI}" stroke-opacity=".5" stroke-dasharray="2 8"><animateTransform attributeName="transform" type="rotate" from="360 ${cx} ${cy}" to="0 ${cx} ${cy}" dur="14s" repeatCount="indefinite"/></circle>
 <circle cx="${cx}" cy="${cy}" r="30" fill="url(#core)" filter="url(#glow)"><animate attributeName="r" values="29;32;29" dur="${busy ? 1.2 : 2.6}s" repeatCount="indefinite"/></circle>
 <text x="${cx}" y="${cy - 3}" text-anchor="middle" font-size="13" font-weight="bold" fill="#fff" font-family="sans-serif">${esc(short(pretty(mainModel), 11))}</text>
-<text x="${cx}" y="${cy + 11}" text-anchor="middle" font-size="10" fill="#a5e8ff" font-family="sans-serif">principal</text>`)
+<text x="${cx}" y="${cy + 11}" text-anchor="middle" font-size="10" fill="#a5e8ff" font-family="sans-serif">${s.main}</text>`)
   const now = live[live.length - 1]
   if (now) {
     const c = KIND_COLOR[now.kind]
     p.push(`<rect x="${cx - 150}" y="${H - 24}" width="300" height="21" rx="10.5" fill="${c}" fill-opacity=".18" stroke="${c}"/>
-<text x="${cx}" y="${H - 9}" text-anchor="middle" font-size="13" fill="${c}" font-family="sans-serif">${esc(short(`● ${now.agent} (${pretty(now.model)}) → ${now.kind === 'mcp' || now.kind === 'plugin' ? now.target : now.tool}`, 44))}</text>`)
+<text x="${cx}" y="${H - 9}" text-anchor="middle" font-size="13" fill="${c}" font-family="sans-serif">${esc(short(`● ${agentName(s, now.agent)} (${pretty(now.model)}) → ${now.kind === 'mcp' || now.kind === 'plugin' ? now.target : now.tool}`, 44))}</text>`)
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W * 3}" height="${H * 3}">${p.join('')}</svg>`
 }
@@ -286,18 +289,19 @@ const ERR_CHARS = 600
 const OPEN = { id: PANE, title: TITLE, backgroundColor: BG }
 // Controls are filled pills: cold slate at rest, accent when on; the selected tab and its strip share TAB.
 const CHIP = '#34404a', CHIP_INK = '#d5e3ee', CHIP_DIM = '#9fb2c2', INK = '#0b1d28', TAB = '#1f5f86'
-const STATUS = { run: 'en curso', done: 'ok', error: 'error' } as const
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'radar', description: 'Open the Radar sidebar (agents, tasks, files)' })
+    const stored = await $.store.get('lang').catch(() => undefined)
+    await update($, lang, () => ({ l: stored === 'es' ? 'es' : 'en' }))
+    await $.command.register({ name: 'radar', description: t(stored === 'es' ? 'es' : 'en').cmdDesc })
     void $.ui.open(OPEN)
     return next(e)
   })
 
   on('command.run', { command: 'radar' }, async $ => {
     await $.ui.open(OPEN)
-    return { text: 'Radar abierto.' }
+    return { text: t((await read($, lang)).l).opened }
   })
 
   // Every model request names its model and loop: that is "which AI is working".
@@ -331,7 +335,7 @@ export const register: Register = on => {
     const a = e as unknown as Args
     const tool = String(e.tool)
     const agentList = await read($, agents)
-    const who = e.agentId ? (agentList.find(x => x.id === e.agentId)?.type ?? 'subagente') : MAIN
+    const who = e.agentId ? (agentList.find(x => x.id === e.agentId)?.type ?? 'subagent') : MAIN
     const model = (await read($, models))[e.agentId ?? 'main']
     const call: RadarCall = { id: e.tool_use_id, agent: who, model, tool, status: 'run', at: Date.now(), ...classify(tool, a) }
 
@@ -380,10 +384,11 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
-    const [ags, tks, cls, fls, mdl, dfs, opened, vw, sc, fd, pk, flt, snc, tb, sz] = await Promise.all([
+    const [ags, tks, cls, fls, mdl, dfs, opened, vw, sc, fd, pk, flt, snc, tb, sz, lg] = await Promise.all([
       read($, agents), read($, tasks), read($, calls), read($, files), read($, models), read($, diffs), read($, open), read($, view),
-      read($, scroll), read($, fold), read($, pick), read($, filter), read($, since), read($, tab), read($, size),
+      read($, scroll), read($, fold), read($, pick), read($, filter), read($, since), read($, tab), read($, size), read($, lang),
     ])
+    const s = t(lg.l)
     const chip = (key: string, label: string, onPress: () => Promise<unknown>, lit = false) => (
       <Box backgroundColor={lit ? ACCENT : CHIP} paddingX={1}>
         <Button key={key} plain label={label} onPress={onPress}><Text bold={lit} color={lit ? INK : CHIP_INK}>{label}</Text></Button>
@@ -406,7 +411,7 @@ export const register: Register = on => {
     // ---------- 1. agents ----------
     const graph = (
       <Box flexDirection="column">
-        <Text bold color={ACCENT}>◉ {pretty(mainModel)} · principal (decide)</Text>
+        <Text bold color={ACCENT}>◉ {pretty(mainModel)} · {s.mainDecides}</Text>
         {groupAgents(ags).map(({ ag: x, n }) => (
           <Text color={x.isDone ? DIM : SUB} maxLines={1}>
             {x.isDone ? '  ✓ ' : '  ⇄ '}
@@ -420,30 +425,30 @@ export const register: Register = on => {
     // board errs narrower than the box: full height, any side margin is full-bleed substrate; use the real slot width if the host ever reports it.
     const boardAspect = (inner * 7.5) / (gRows * 18)
     const graphBox = vector ? (
-      <vector.Svg source={vw.graph === 'radar' ? graphSvg(ags, cls, mainModel) : boardSvg(ags, cls, mainModel, boardAspect)} alt={`${pretty(mainModel)} con ${ags.filter(x => !x.isDone).length} subagentes activos y ${live.length} herramientas en curso`} isInteractive height={gRows * 18} />
+      <vector.Svg source={vw.graph === 'radar' ? graphSvg(ags, cls, mainModel, s) : boardSvg(ags, cls, mainModel, boardAspect, s)} alt={s.graphAlt(pretty(mainModel), ags.filter(x => !x.isDone).length, live.length)} isInteractive height={gRows * 18} />
     ) : graph
     // Only graphic surfaces draw the SVG, so only they get the switch.
     const toggle = graphBox !== graph ? (
-      chip('graph-toggle', vw.graph === 'radar' ? '⇄ Placa' : '⇄ Radar', () => update($, view, v => ({ graph: v.graph === 'radar' ? ('board' as const) : ('radar' as const) })))
+      chip('graph-toggle', vw.graph === 'radar' ? `⇄ ${s.board}` : '⇄ Radar', () => update($, view, v => ({ graph: v.graph === 'radar' ? ('board' as const) : ('radar' as const) })))
     ) : undefined
 
-    // ---------- 2. tareas ----------
+    // ---------- 2. tasks ----------
     const doneN = tks.filter(t => t.status === 'completed').length
     const current = tks.find(t => t.status === 'in_progress')
     const pct = tks.length ? Math.round((doneN / tks.length) * 100) : 0
     const figure = ` ${doneN}/${tks.length} · ${pct}%`
     const barW = Math.max(4, inner - figure.length)
     const elapsed = current && snc.content === current.content ? ` · ${dur(Date.now() - snc.at)}` : ''
-    const plan = !tks.length ? [<Text color={DIM} maxLines={1}>SIN PLAN ACTIVO</Text>] : [
+    const plan = !tks.length ? [<Text color={DIM} maxLines={1}>{s.noPlan}</Text>] : [
           <Box flexDirection="row">
             {vector ? (
-              <vector.Svg source={planSvg(tks, barW * 7.5)} alt={`Plan: ${doneN} de ${tks.length} tareas hechas`} isInteractive height={10} />
+              <vector.Svg source={planSvg(tks, barW * 7.5)} alt={s.planAlt(doneN, tks.length)} isInteractive height={10} />
             ) : (
               <Text maxLines={1}>{planCells(tks, barW).map(([s, k]) => <Text color={SEG_COLOR[k]}>{s}</Text>)}</Text>
             )}
             <Text color={SILK} maxLines={1}>{figure}</Text>
           </Box>,
-          ...(doneN === tks.length ? [<Text color={DIM} maxLines={1}>✓ plan completo</Text>] : []),
+          ...(doneN === tks.length ? [<Text color={DIM} maxLines={1}>{s.planDone}</Text>] : []),
         ]
     const MARK: Record<string, [string, string]> = { completed: ['✓', DIM], in_progress: ['▶', ACCENT] }
     const taskLines = tks.map(t => {
@@ -457,7 +462,7 @@ export const register: Register = on => {
     const ci = current ? tks.indexOf(current) : tks.length - 1
     const taskOff = Math.max(0, Math.min(taskMax, sc.tasksFor === curKey ? sc.tasks : ci - Math.floor(taskWin / 2)))
 
-    // ---------- 3. procesos ----------
+    // ---------- 3. calls ----------
 
     const agentsSeen = ['', MAIN, ...new Set(cls.map(c => c.agent).filter(x => x !== MAIN))]
     const shown = cls.filter(c => (!flt.errors || c.status === 'error') && (!flt.agent || c.agent === flt.agent))
@@ -484,7 +489,7 @@ export const register: Register = on => {
             <Text color={c.status === 'error' ? ERR : c.status === 'run' ? ACCENT : DIM}>{c.status === 'run' ? '●' : c.status === 'error' ? '✕' : '·'}</Text>{' '}
             <Text color={KIND_COLOR[c.kind]}>[{c.kind}]</Text> {c.kind === 'mcp' || c.kind === 'plugin' ? c.target : c.tool}
             {r.more ? <Text color={DIM}> +{r.more}</Text> : ''}
-            <Text color={DIM}> · {c.agent}</Text>
+            <Text color={DIM}> · {agentName(s, c.agent)}</Text>
             <Text color={fin ? DIM : SILK}> {pretty(c.model)}</Text>
             {c.target && c.kind !== 'mcp' && c.kind !== 'plugin' ? <Text color={DIM}> · {short(norm(c.target).split('/').pop() ?? '', 24)}</Text> : ''}
             <Text color={DIM}> {dur(c.ms)}</Text>
@@ -498,20 +503,20 @@ export const register: Register = on => {
     const label = (t: string, color: string = DIM) => <Text bold color={color} maxLines={1}>{t}</Text>
     const top = picked[0]
     const detailLines = !top
-      ? [<Text color={DIM}>Ese proceso ya no está en el historial.</Text>]
+      ? [<Text color={DIM}>{s.gone}</Text>]
       : [
-          kv('Herramienta', top.tool),
-          kv('Tipo', `[${top.kind}]`, KIND_COLOR[top.kind]),
-          kv('Agente', top.agent),
-          kv('Modelo', pretty(top.model)),
-          kv('Inicio', clock(top.at)),
-          kv('Duración', dur(top.ms)),
-          kv('Estado', STATUS[top.status], top.status === 'error' ? ERR : top.status === 'run' ? ACCENT : SILK),
-          label('OBJETIVO'),
+          kv(s.fTool, top.tool),
+          kv(s.fType, `[${top.kind}]`, KIND_COLOR[top.kind]),
+          kv(s.fAgent, agentName(s, top.agent)),
+          kv(s.fModel, pretty(top.model)),
+          kv(s.fStart, clock(top.at)),
+          kv(s.fDur, dur(top.ms)),
+          kv(s.fStatus, s.status[top.status], top.status === 'error' ? ERR : top.status === 'run' ? ACCENT : SILK),
+          label(s.target),
           ...(top.target ? wrap(top.target, inner).map(l => <Text color={SILK} maxLines={1}>{l}</Text>) : [<Text color={DIM}>—</Text>]),
-          ...(top.err ? [label('ERROR', ERR), ...wrap(top.err, inner).map(l => <Text color={ERR} maxLines={1}>{l}</Text>)] : []),
+          ...(top.err ? [label(s.error, ERR), ...wrap(top.err, inner).map(l => <Text color={ERR} maxLines={1}>{l}</Text>)] : []),
           ...(picked.length > 1
-            ? [label(`${picked.length - 1} MÁS PLEGADOS`), ...picked.slice(1).map(c => <Text color={DIM} maxLines={1}>· {clock(c.at)} {dur(c.ms)} {short(norm(c.target), inner - 20)}</Text>)]
+            ? [label(s.folded(picked.length - 1)), ...picked.slice(1).map(c => <Text color={DIM} maxLines={1}>· {clock(c.at)} {dur(c.ms)} {short(norm(c.target), inner - 20)}</Text>)]
             : []),
         ]
     const detMax = Math.max(0, detailLines.length - procWin)
@@ -523,16 +528,16 @@ export const register: Register = on => {
     }
     const fltRow = (
       <Box flexDirection="row" gap={1}>
-        {chip('flt-err', `${flt.errors ? '●' : '○'} solo errores`, setFilter(f => ({ ...f, errors: !f.errors })), flt.errors)}
-        {chip('flt-agent', `agente: ${flt.agent || 'todos'}`, setFilter(f => {
+        {chip('flt-err', `${flt.errors ? '●' : '○'} ${s.errOnly}`, setFilter(f => ({ ...f, errors: !f.errors })), flt.errors)}
+        {chip('flt-agent', s.agentF(flt.agent ? agentName(s, flt.agent) : s.all), setFilter(f => {
           const i = agentsSeen.indexOf(f.agent)
           return { ...f, agent: i < 0 ? '' : agentsSeen[(i + 1) % agentsSeen.length] ?? '' }
         }), flt.agent !== '')}
-        {procOff > 0 ? chip('procs-latest', nNew ? `● ${nNew} nuevos · ir a lo último` : 'ir a lo último', () => update($, scroll, s => ({ ...s, procs: 0, mark: '' })), nNew > 0) : ''}
+        {procOff > 0 ? chip('procs-latest', nNew ? `● ${s.nNew(nNew)} · ${s.latest}` : s.latest, () => update($, scroll, s => ({ ...s, procs: 0, mark: '' })), nNew > 0) : ''}
       </Box>
     )
 
-    // ---------- 4. archivos ----------
+    // ---------- 4. files ----------
     const lines: Line[] = []
     let root = ''
     if (fls.length) {
@@ -553,7 +558,7 @@ export const register: Register = on => {
     const fileLines = diff
       ? diff.map(l => <Text maxLines={1} color={DIFF_COLOR(l)}>{short(l, inner)}</Text>)
       : fls.length === 0
-        ? [<Text color={DIM}>Ningún archivo tocado.</Text>]
+        ? [<Text color={DIM}>{s.noFiles}</Text>]
         : [
             <Text color={DIM} maxLines={1}>{short(root, inner)}</Text>,
             ...lines.map(l =>
@@ -578,14 +583,14 @@ export const register: Register = on => {
 
     const procsBody = inDetail ? (
       <Box flexDirection="column">
-        <Box flexDirection="row">{chip('proc-back', '← volver', () => update($, pick, () => ({ ids: [] })))}</Box>
+        <Box flexDirection="row">{chip('proc-back', s.back, () => update($, pick, () => ({ ids: [] })))}</Box>
         {detailLines.slice(detOff, detOff + procWin)}
       </Box>
     ) : (
       <Box flexDirection="column">
         {fltRow}
         {rows.length === 0
-          ? <Text color={DIM}>{cls.length ? 'Nada coincide con el filtro.' : 'Nada aún.'}</Text>
+          ? <Text color={DIM}>{cls.length ? s.noMatch : s.nothing}</Text>
           : feedLines.slice(procOff, procOff + procWin)}
       </Box>
     )
@@ -593,10 +598,10 @@ export const register: Register = on => {
     const filesBody = (
       <Box flexDirection="column">
         {diff ? (
-          <Box flexDirection="row">{chip('diff-back', '← volver al árbol', show(''))}</Box>
+          <Box flexDirection="row">{chip('diff-back', s.backTree, show(''))}</Box>
         ) : (
           <Text color={DIM} maxLines={1}>
-            <Text color={OP.read.color}>👁 leído</Text> <Text color={OP.edit.color}>✎ editado</Text> <Text color={OP.create.color}>✚ creado</Text> · subrayado: ver diff
+            <Text color={OP.read.color}>👁 {s.read}</Text> <Text color={OP.edit.color}>✎ {s.edited}</Text> <Text color={OP.create.color}>✚ {s.created}</Text> · {s.diffHint}
           </Text>
         )}
         {fileLines.slice(fileOff, fileOff + fileWin)}
@@ -607,13 +612,13 @@ export const register: Register = on => {
     type Scroll = { title: RenderChildren; total: number; win: number; off: number; k: 'tasks' | 'procs' | 'det' | 'files'; body: RenderChildren }
     const tabOf: Scroll =
       cur === 'tasks'
-        ? { title: 'J1 · TAREAS', total: tks.length, win: taskWin, off: taskOff, k: 'tasks', body: <Box flexDirection="column">{plan}{taskLines.slice(taskOff, taskOff + taskWin)}</Box> }
+        ? { title: `J1 · ${s.tasks}`, total: tks.length, win: taskWin, off: taskOff, k: 'tasks', body: <Box flexDirection="column">{plan}{taskLines.slice(taskOff, taskOff + taskWin)}</Box> }
         : cur === 'procs'
           ? inDetail
-            ? { title: `J2 · PROCESO · ${short(top?.tool ?? '', inner - 20)}`, total: detailLines.length, win: procWin, off: detOff, k: 'det', body: procsBody }
-            : { title: 'J2 · PROCESOS', total: rows.length, win: procWin, off: procOff, k: 'procs', body: procsBody }
+            ? { title: `J2 · ${s.proc} · ${short(top?.tool ?? '', inner - 20)}`, total: detailLines.length, win: procWin, off: detOff, k: 'det', body: procsBody }
+            : { title: `J2 · ${s.procs}`, total: rows.length, win: procWin, off: procOff, k: 'procs', body: procsBody }
           : {
-              title: diff ? [`J3 · DIFF · ${short(norm(opened.path).split('/').pop() ?? '', inner - 26)} `, ...pm(plusMinus(diff))] : 'J3 · ARCHIVOS',
+              title: diff ? [`J3 · DIFF · ${short(norm(opened.path).split('/').pop() ?? '', inner - 26)} `, ...pm(plusMinus(diff))] : `J3 · ${s.files}`,
               total: fileLines.length, win: fileWin, off: fileOff, k: 'files', body: filesBody,
             }
     const { k, off } = tabOf
@@ -631,7 +636,7 @@ export const register: Register = on => {
       procs: [live.length ? <Text color={ACCENT}> ●{live.length}</Text> : '', errN ? <Text color={ERR}> ✕{errN}</Text> : ''],
       files: nEdit + nNew2 ? <Text color={SILK}> {nEdit + nNew2}</Text> : '',
     }
-    const NAME: Record<Tab, string> = { tasks: 'TAREAS', procs: 'PROCESOS', files: 'ARCHIVOS' }
+    const NAME: Record<Tab, string> = { tasks: s.tasks, procs: s.procs, files: s.files }
     const tabBar = (
       <Box flexDirection="row" gap={1}>
         {chip('fold-tabs', fd.tabs ? '▸' : '▾', () => update($, fold, f => ({ ...f, tabs: !f.tabs })))}
@@ -674,9 +679,15 @@ export const register: Register = on => {
             {chip('fold-graph', fd.graph ? '▸' : '▾', () => update($, fold, f => ({ ...f, graph: !f.graph })))}
             <Text> </Text>
             <Box flexGrow={1}>
-              <Text bold color={SILK} maxLines={1}><Text color={DIM}>U0 · </Text>AGENTES</Text>
+              <Text bold color={SILK} maxLines={1}><Text color={DIM}>U0 · </Text>{s.agents}</Text>
             </Box>
             {toggle ?? ''}
+            <Text> </Text>
+            {chip('lang-toggle', lg.l.toUpperCase(), async () => {
+              const next: Lang = lg.l === 'es' ? 'en' : 'es'
+              await $.store.set('lang', next)
+              await update($, lang, () => ({ l: next }))
+            })}
           </Box>,
           fd.graph ? '' : graphBox,
         ])}

@@ -33,13 +33,13 @@ export function groupAgents(list: RadarAgent[], max = 8): AgentGroup[] {
   return [...run, ...done.values()].slice(0, max)
 }
 
-// One station (radar) or peripheral chip (board) per kind of tool.
-export const STATIONS: { kind: Kind; label: string }[] = [
-  { kind: 'tool', label: 'Archivos' },
-  { kind: 'skill', label: 'Skills' },
-  { kind: 'mcp', label: 'MCP' },
-  { kind: 'plugin', label: 'Plugins' },
-  { kind: 'webhook', label: 'Webhooks' },
-  { kind: 'web', label: 'Web' },
-  { kind: 'agent', label: 'Agentes' },
+// One station (radar) or peripheral chip (board) per kind of tool; labels live in i18n.ts.
+export const STATIONS: { kind: Kind }[] = [
+  { kind: 'tool' },
+  { kind: 'skill' },
+  { kind: 'mcp' },
+  { kind: 'plugin' },
+  { kind: 'webhook' },
+  { kind: 'web' },
+  { kind: 'agent' },
 ]

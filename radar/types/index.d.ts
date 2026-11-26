@@ -46,6 +46,7 @@ declare module 'claude-code' {
       since: Shaped<{ content: string; at: number }>
       tab: Shaped<{ tab: 'tasks' | 'procs' | 'files' }>
       size: Shaped<{ i: number }>
+      lang: Shaped<{ l: 'en' | 'es' }>
     }
   }
 }

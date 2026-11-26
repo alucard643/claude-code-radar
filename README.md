@@ -25,7 +25,7 @@ Bottom box, three tabs with live badges:
 - **PROCESOS**: live feed of tool calls with kind, agent, model and duration. Filters: "solo errores" and by agent. Press a row for full detail, including the complete command or path and the error text. "ir a lo último" jumps to the newest call.
 - **ARCHIVOS**: tree of files read, edited and created, with `+A −D` changed lines per file. Press an edited file to see its diff.
 
-Controls: fold either box, a button that cycles three height presets, scroll buttons. The palette is cold gray/blue, to match the Claude Code UI. The UI text is in Spanish.
+Controls: fold either box, a button that cycles three height presets, scroll buttons. The palette is cold gray/blue, to match the Claude Code UI. The UI is available in English and Spanish: switch with the `EN`/`ES` button in the pane header (English by default; the choice is remembered).
 
 ## Install
 
@@ -46,7 +46,7 @@ Radar opens automatically at session start. Run `/radar` to reopen it.
 - Developed and checked on Windows with the Claude desktop app. In the terminal, the graph falls back to text.
 - The feed keeps the last 120 calls.
 - No data leaves your machine. The mod makes no network calls: searching the hooks for `fetch`, `$.net`, `$.http` and `$.model` finds nothing.
-- The UI text is in Spanish.
+- The UI is available in English and Spanish: switch with the `EN`/`ES` button in the pane header (English by default; the choice is remembered).
 
 ## Development
 
@@ -94,7 +94,7 @@ Caja inferior, tres pestañas con contadores en vivo:
 - **PROCESOS**: feed en vivo de llamadas a herramientas con tipo, agente, modelo y duración. Filtros: "solo errores" y por agente. Pulsa una fila para ver el detalle completo, con el comando o ruta completos y el texto del error. "ir a lo último" salta a la llamada más reciente.
 - **ARCHIVOS**: árbol de archivos leídos, editados y creados, con líneas cambiadas `+A −D` por archivo. Pulsa un archivo editado para ver su diff.
 
-Controles: plegar cualquiera de las dos cajas, un botón que alterna tres alturas predefinidas, botones de scroll. La paleta es gris/azul frío, a juego con la interfaz de Claude Code. El texto de la interfaz está en español.
+Controles: plegar cualquiera de las dos cajas, un botón que alterna tres alturas predefinidas, botones de scroll. La paleta es gris/azul frío, a juego con la interfaz de Claude Code. La interfaz está disponible en inglés y español: se cambia con el botón `EN`/`ES` de la cabecera del panel (inglés por defecto; la elección se recuerda).
 
 ## Instalación
 
@@ -115,7 +115,7 @@ Radar se abre solo al iniciar la sesión. Ejecuta `/radar` para reabrirlo.
 - Desarrollado y comprobado en Windows con la app de escritorio de Claude. En la terminal, el grafo usa un texto alternativo.
 - El feed guarda las últimas 120 llamadas.
 - Ningún dato sale de tu máquina. El mod no hace llamadas de red: buscar `fetch`, `$.net`, `$.http` y `$.model` en los hooks no encuentra nada.
-- El texto de la interfaz está en español.
+- La interfaz está disponible en inglés y español: se cambia con el botón `EN`/`ES` de la cabecera del panel (inglés por defecto; la elección se recuerda).
 
 ## Desarrollo
 

@@ -1,10 +1,14 @@
 import type { TestBody } from 'claude-code/testing'
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test as rawTest } from 'claude-code/testing'
 import { boardSize, boardSvg } from './board'
 import type { RadarAgent } from '../types'
-import { heights } from './register'
+import { T } from './i18n'
+import { graphSvg, heights } from './register'
 import { planCells, planSvg } from './plan'
 import { pretty } from './model-name'
+
+// The suite asserts the Spanish UI: every test starts with 'es' stored, as a user who picked it would.
+const test = (name: string, body: TestBody) => rawTest(name, ($, on) => { mock.store(on, { lang: 'es' }); return body($, on) })
 
 const PANE = {
   plugin: 'radar',
@@ -513,4 +517,71 @@ test('board: cold palette, no sweep band, a pulse from the CPU paced by load', a
   expect(rings(busy)).toBe(3)
   expect(idle).toMatch(/<g id="pulse"[^]*?dur="4s"/)
   expect(busy).toMatch(/<g id="pulse"[^]*?dur="1s"/)
+})
+
+// ---------- language ----------
+const boot = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1], stored?: Record<string, unknown>) => {
+  mock.store(on, stored)
+  base(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+}
+const labels = async (ui: { find: (q: { key: string }) => Promise<{ text: string } | null | undefined> }) =>
+  ['tab-tasks', 'tab-procs', 'tab-files'].map(async k => (await ui.find({ key: k }))?.text)
+
+rawTest('default language is English; lang-toggle switches the whole pane and back', async ($, on) => {
+  await boot($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ key: 'lang-toggle' }))?.props.label).toBe('EN')
+  expect(await Promise.all(await labels(ui))).toEqual(['TASKS', 'CALLS', 'FILES'])
+  expect((await ui.find({ key: 'graph-toggle' }))?.props.label).toBe('⇄ Radar')
+  await ui.press({ key: 'graph-toggle' })
+  expect((await ui.find({ key: 'graph-toggle' }))?.props.label).toBe('⇄ Board')
+  await ui.press({ key: 'tab-tasks' })
+  expect(await ui.find({ type: 'Text', text: /NO ACTIVE PLAN/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /J1 · TASKS/ })).toBeTruthy()
+  await ui.press({ key: 'lang-toggle' })
+  expect((await ui.find({ key: 'lang-toggle' }))?.props.label).toBe('ES')
+  expect(await Promise.all(await labels(ui))).toEqual(['TAREAS', 'PROCESOS', 'ARCHIVOS'])
+  expect((await ui.find({ key: 'graph-toggle' }))?.props.label).toBe('⇄ Placa')
+  expect(await ui.find({ type: 'Text', text: /SIN PLAN ACTIVO/ })).toBeTruthy()
+  await ui.press({ key: 'lang-toggle' })
+  expect(await Promise.all(await labels(ui))).toEqual(['TASKS', 'CALLS', 'FILES'])
+  await ui.unmount()
+})
+
+rawTest('the language choice is kept in the store and survives a new session.start', async ($, on) => {
+  await boot($, on)
+  let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'lang-toggle' })
+  await ui.unmount()
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ key: 'lang-toggle' }))?.props.label).toBe('ES')
+  await ui.unmount()
+})
+
+rawTest('a stored language is used from the first draw', async ($, on) => {
+  await boot($, on, { lang: 'es' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await Promise.all(await labels(ui))).toEqual(['TAREAS', 'PROCESOS', 'ARCHIVOS'])
+  await ui.unmount()
+})
+
+rawTest('boardSvg and graphSvg texts follow the string set; both tables share their keys', async () => {
+  const FLEET0: RadarAgent[] = [{ id: 'a', type: 'Explore', desc: '', isDone: false, model: 'claude-haiku-5-5' }, { id: 'b', type: 'Plan', desc: '', isDone: true }]
+  const en = boardSvg(FLEET0, [], 'claude-opus-5-5', 0.75, T.en)
+  const es = boardSvg(FLEET0, [], 'claude-opus-5-5', 0.75, T.es)
+  expect(en).toContain('>FILES<')
+  expect(en).toContain('>MAIN<')
+  expect(en).toContain('RUNNING')
+  expect(en).toContain('○ idle')
+  expect(en).not.toMatch(/PRINCIPAL|ARCHIVOS|EN CURSO|en espera/)
+  expect(es).toContain('>ARCHIVOS<')
+  expect(es).toContain('>PRINCIPAL<')
+  expect(es).toContain('EN CURSO')
+  expect(es).toContain('○ en espera')
+  expect(graphSvg(FLEET0, [], 'claude-opus-5-5', T.en)).toContain('>Files<')
+  expect(graphSvg(FLEET0, [], 'claude-opus-5-5', T.es)).toContain('>Archivos<')
+  const keys = (o: object): string[] => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? keys(v).map(x => `${k}.${x}`) : [k])).sort()
+  expect(keys(T.es)).toEqual(keys(T.en))
 })

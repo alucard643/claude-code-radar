@@ -1,5 +1,6 @@
 import type { RadarAgent, RadarCall } from '../types'
 import { pretty } from './model-name'
+import { agentName, T, type Strings } from './i18n'
 import { ERR, ERR_SOFT, esc, groupAgents, type Kind, KIND_COLOR, short, STATIONS } from './shared'
 
 // Circuit-board view of the same data the radar draws. Pure: data in, SVG string out.
@@ -115,7 +116,7 @@ function decor(W: number, H: number, L: ReturnType<typeof layout>): string {
   return p.join('')
 }
 
-export function boardSvg(list: RadarAgent[], cls: RadarCall[], mainModel: string, aspect = 400 / 330): string {
+export function boardSvg(list: RadarAgent[], cls: RadarCall[], mainModel: string, aspect = 400 / 330, s: Strings = T.en): string {
   const { W, H } = boardSize(aspect)
   const groups = groupAgents(list)
   const two = groups.length > 4
@@ -177,7 +178,7 @@ export function boardSvg(list: RadarAgent[], cls: RadarCall[], mainModel: string
     p.push(`<rect x="${n1(bx)}" y="${n1(by)}" width="${CW}" height="${CH}" rx="3" fill="${RAISED}" stroke="${n ? col : HAIR}" stroke-opacity="${n ? 0.85 : 1}"/>`)
     p.push(`<rect x="${n1(bx + 4)}" y="${n1(by + 3)}" width="${CW - 8}" height="1.2" fill="${col}" fill-opacity="${n ? 0.9 : 0.25}"/>`)
     p.push(`<path d="M${n1(bx)},${n1(by + 5)} l5,-5" stroke="${DIM}" stroke-width=".6"/>`)
-    p.push(`<text x="${n1(c.cx)}" y="${n1(c.cy + 3.5)}" text-anchor="middle" font-size="9.5" font-weight="bold" fill="${n ? SILK : DIM}" ${FONT} letter-spacing=".4">${esc(st.label.toUpperCase())}</text>`)
+    p.push(`<text x="${n1(c.cx)}" y="${n1(c.cy + 3.5)}" text-anchor="middle" font-size="9.5" font-weight="bold" fill="${n ? SILK : DIM}" ${FONT} letter-spacing=".4">${esc(s.station[st.kind].toUpperCase())}</text>`)
     // LED bar: up to 5 segments by use, blinking while live
     const lit = n ? Math.min(5, Math.ceil(n / 4)) : 0
     let seg = ''
@@ -232,7 +233,7 @@ export function boardSvg(list: RadarAgent[], cls: RadarCall[], mainModel: string
     const lx = x + SW + 5
     p.push(`<text x="${n1(lx)}" y="${n1(y + 6)}" font-size="8" fill="${SILK}" ${FONT}>${esc(name)}</text>`)
     p.push(`<text x="${n1(lx)}" y="${n1(y + 15)}" font-size="7.5" fill="${run ? '#c4b5fd' : DIM}" ${FONT}>${esc(short(pretty(ag.model).toUpperCase(), chars))}</text>`)
-    p.push(`<text x="${n1(lx)}" y="${n1(y + 24)}" font-size="6.5" fill="${run ? ACCENT_HI : DIM}" ${FONT}>${esc(short(run ? (ag.tool ? `→ ${ag.tool}` : 'EN CURSO') : n > 1 ? `${n} HECHOS` : 'HECHO', chars + 2))}</text>`)
+    p.push(`<text x="${n1(lx)}" y="${n1(y + 24)}" font-size="6.5" fill="${run ? ACCENT_HI : DIM}" ${FONT}>${esc(short(run ? (ag.tool ? `→ ${ag.tool}` : s.running) : n > 1 ? s.nDone(n) : s.done, chars + 2))}</text>`)
     p.push(`</g>`)
     if (run) {
       // reports stream up to the CPU, orders stream back down
@@ -267,7 +268,7 @@ export function boardSvg(list: RadarAgent[], cls: RadarCall[], mainModel: string
     c.push(`<path d="M${cx + ox},${cy + oy} h2.4 v2.4 h-2.4z m3.4,0 h2.4 v2.4 h-2.4z m-3.4,3.4 h2.4 v2.4 h-2.4z m3.4,0 h2.4 v2.4 h-2.4z" fill="${ACCENT}" opacity=".2"><animate attributeName="opacity" values=".15;.95;.15" dur="${busy ? 1.2 : 6}s" begin="${(k * (busy ? 0.3 : 1.5)).toFixed(1)}s" repeatCount="indefinite"/></path>`),
   )
   c.push(`<text x="${cx}" y="${cy - 1}" text-anchor="middle" font-size="11" font-weight="bold" fill="#eef6fb" ${FONT}>${esc(short(pretty(mainModel).toUpperCase(), 9))}</text>`)
-  c.push(`<text x="${cx}" y="${cy + 10}" text-anchor="middle" font-size="7" fill="${ACCENT}" ${FONT} letter-spacing=".8">PRINCIPAL</text>`)
+  c.push(`<text x="${cx}" y="${cy + 10}" text-anchor="middle" font-size="7" fill="${ACCENT}" ${FONT} letter-spacing=".8">${s.boardMain}</text>`)
   p.push(k === 1 ? c.join('') : `<g transform="translate(${n1(cx)},${n1(cy)}) scale(${n1(k)}) translate(${n1(-cx)},${n1(-cy)})">${c.join('')}</g>`)
   p.push(`<text x="${n1(cx - PTs - 12)}" y="${n1(cy - PTs + 4)}" font-size="8" fill="${SILK}" fill-opacity=".8" ${FONT}>U1</text>`)
 
@@ -277,7 +278,7 @@ export function boardSvg(list: RadarAgent[], cls: RadarCall[], mainModel: string
   p.push(`<text x="${W - 14}" y="${n1(L.readY)}" text-anchor="end" font-size="5.5" fill="${DIM}" ${FONT}>${esc(read)}</text>`)
   const now = live[live.length - 1]
   const sc = now ? KIND_COLOR[now.kind] : HAIR
-  const msg = now ? `● ${now.agent} (${pretty(now.model)}) → ${now.kind === 'mcp' || now.kind === 'plugin' ? now.target : now.tool}` : '○ en espera'
+  const msg = now ? `● ${agentName(s, now.agent)} (${pretty(now.model)}) → ${now.kind === 'mcp' || now.kind === 'plugin' ? now.target : now.tool}` : s.idle
   p.push(`<rect x="${cx - 150}" y="${H - 27}" width="300" height="20" rx="3" fill="${RAISED}" stroke="${sc}" stroke-opacity="${now ? 0.9 : 1}"/><text x="${cx}" y="${H - 13}" text-anchor="middle" font-size="10" fill="${now ? sc : DIM}" ${FONT}>${esc(short(msg, 44))}</text>`)
 
   // width is oversized on purpose: the host clamps it to the slot and the height comes from the Svg prop
