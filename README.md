@@ -10,14 +10,18 @@ Radar is a sidebar pane for Claude Code that shows, live, what the session is do
 
 ![Radar, Placa view: motherboard graph of the session](docs/board.png)
 
-*Rendered preview of the Placa view.*
+*Board view (rendered preview).*
+
+![Radar view: the main agent in the centre, subagents on the inner ring, tool kinds on the outer ring](docs/radar.png)
+
+*Radar view, the original one that gives the mod its name (screenshot from the desktop app).*
 
 ## Features
 
 Top box, `U0 · AGENTES`: an animated graph with two views, switched by a button.
 
 - **Placa** (default): a motherboard. The main agent is the central CPU chip and shows its model. Seven peripheral chips stand for the kinds of tool use (Archivos, Skills, MCP, Plugins, Webhooks, Web, Agentes). Buses link them; a bus gets brighter the more it is used and carries animated light packets while calls run. Error LEDs show error counts. Subagents are smaller chips on an expansion bus: running ones are shown one by one with what they are doing, finished ones are grouped by type and model with ×N. A pulse expands from the CPU and speeds up with workload. A status strip shows the current call.
-- **Radar**: the same data as a radar, with stations on rings.
+- **Radar**: the view the mod is named after. The main agent is the core in the centre with its model. Subagents sit on the inner ring, grouped by type and model. The seven kinds of tool use are stations on the outer ring: each spoke thickens with use, pulses fly to the stations that are working, a red badge counts errors, and a sweep turns around the core.
 
 Bottom box, three tabs with live badges:
 
@@ -79,14 +83,18 @@ Radar es un panel lateral para Claude Code que muestra en vivo qué hace la sesi
 
 ![Radar, vista Placa: grafo de placa base de la sesión](docs/board.png)
 
-*Vista previa renderizada de la vista Placa.*
+*Vista Placa (vista previa renderizada).*
+
+![Vista Radar: el agente principal en el centro, los subagentes en el anillo interior y los tipos de herramienta en el anillo exterior](docs/radar.png)
+
+*Vista Radar, la original, que da nombre al mod (captura de la app de escritorio).*
 
 ## Características
 
 Caja superior, `U0 · AGENTES`: un grafo animado con dos vistas, que se cambian con un botón.
 
 - **Placa** (por defecto): una placa base. El agente principal es el chip central (CPU) y muestra su modelo. Siete chips periféricos representan los tipos de uso de herramientas (Archivos, Skills, MCP, Plugins, Webhooks, Web, Agentes). Los buses los unen; un bus se ilumina más cuanto más se usa y lleva paquetes de luz animados mientras corren las llamadas. Los LED de error muestran el número de errores. Los subagentes son chips más pequeños en un bus de expansión: los que corren se muestran uno a uno con lo que hacen, los terminados se agrupan por tipo y modelo con ×N. Un pulso se expande desde la CPU y se acelera con la carga de trabajo. Una franja de estado muestra la llamada actual.
-- **Radar**: los mismos datos como un radar, con estaciones en anillos.
+- **Radar**: la vista que da nombre al mod. El agente principal es el núcleo del centro, con su modelo. Los subagentes van en el anillo interior, agrupados por tipo y modelo. Los siete tipos de uso de herramientas son estaciones en el anillo exterior: cada radio se engrosa con el uso, los pulsos vuelan hacia las estaciones que están trabajando, una insignia roja cuenta los errores y un barrido gira alrededor del núcleo.
 
 Caja inferior, tres pestañas con contadores en vivo:
 
