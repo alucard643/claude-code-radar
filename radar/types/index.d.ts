@@ -28,6 +28,19 @@ export type RadarFile = { path: string; op: 'read' | 'edit' | 'create' }
 /** Unified-diff lines ('@@ …', '+x', '-x', ' x') per edited file path. */
 export type RadarDiffs = Record<string, string[]>
 
+/** Tokens of one model: uncached in, out, cache read, cache written. */
+export type RadarRow = { m: string; i: number; o: number; r: number; c: number }
+
+/** Last known figures of one subagent; kept after it leaves $.agent.list(). */
+export type RadarSpend = { id: string; type: string; done: boolean; rows: RadarRow[]; usd?: number }
+
+/** Last reading of $.session.usage(); a missing figure is left out, never zeroed. */
+export type RadarUsage = {
+  ctx?: { tokens: number; window: number; percent: number }
+  limits: { kind: string; pct: number; resets?: string }[]
+  usd?: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     radar: {
@@ -35,7 +48,7 @@ declare module 'claude-code' {
       tasks: Shaped<RadarTask[]>
       calls: Shaped<RadarCall[]>
       files: Shaped<RadarFile[]>
-      scroll: Shaped<{ procs: number; files: number; det: number; mark: string; tasks: number; tasksFor: string }>
+      scroll: Shaped<{ procs: number; files: number; det: number; mark: string; tasks: number; tasksFor: string; usage: number }>
       models: Shaped<Record<string, string>>
       diffs: Shaped<RadarDiffs>
       open: Shaped<{ path: string }>
@@ -44,9 +57,13 @@ declare module 'claude-code' {
       pick: Shaped<{ ids: string[] }>
       filter: Shaped<{ errors: boolean; agent: string }>
       since: Shaped<{ content: string; at: number }>
-      tab: Shaped<{ tab: 'tasks' | 'procs' | 'files' }>
+      tab: Shaped<{ tab: 'tasks' | 'procs' | 'files' | 'usage' }>
       size: Shaped<{ i: number }>
       lang: Shaped<{ l: 'en' | 'es' }>
+      usage: Shaped<RadarUsage>
+      ledger: Shaped<{ main: RadarRow[]; subs: RadarSpend[] }>
+      prefs: Shaped<{ handoff: number; cost: boolean }>
+      alert: Shaped<{ fired: boolean }>
     }
   }
 }

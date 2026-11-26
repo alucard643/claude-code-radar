@@ -1,12 +1,13 @@
 import { atom, read, update } from 'claude-code'
-import type { Register, RenderChildren } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { RadarAgent, RadarCall, RadarDiffs, RadarFile, RadarTask } from '../types'
+import type { RadarAgent, RadarCall, RadarDiffs, RadarFile, RadarRow, RadarSpend, RadarTask, RadarUsage } from '../types'
 import { ACCENT, ACCENT_HI, BG, boardSvg, DIM, HAIR, SILK, SUB } from './board'
 import { pretty } from './model-name'
 import { planCells, planSvg, SEG_COLOR } from './plan'
 import { agentName, type Lang, type Strings, t } from './i18n'
 import { ERR, esc, groupAgents, KIND_COLOR, short, STATIONS } from './shared'
+import { addRow, bar, byModel, COST_KEY, fmt, HANDOFF_KEY, level, presetLabel, PRESETS, spenders, sum, until } from './usage'
 
 const PANE = 'radar'
 const TITLE = 'Radar'
@@ -18,7 +19,7 @@ const tasks = atom({ plugin: 'radar', key: 'tasks' } as const, [] as RadarTask[]
 const calls = atom({ plugin: 'radar', key: 'calls' } as const, [] as RadarCall[], { shape: 'calls-2' })
 const files = atom({ plugin: 'radar', key: 'files' } as const, [] as RadarFile[], { shape: 'files-1' })
 // procs/files/det/tasks: first row shown; tasksFor: 'cur:<task>' the user scrolled Tasks under, else auto-follow; mark: newest call id when Calls was scrolled away from the top.
-const scroll = atom({ plugin: 'radar', key: 'scroll' } as const, { procs: 0, files: 0, det: 0, mark: '', tasks: 0, tasksFor: '' }, { shape: 'scroll-3' })
+const scroll = atom({ plugin: 'radar', key: 'scroll' } as const, { procs: 0, files: 0, det: 0, mark: '', tasks: 0, tasksFor: '', usage: 0 }, { shape: 'scroll-4' })
 // Last model each loop asked, keyed by agentId ('main' for the main loop).
 const models = atom({ plugin: 'radar', key: 'models' } as const, {} as Record<string, string>, { shape: 'models-1' })
 const diffs = atom({ plugin: 'radar', key: 'diffs' } as const, {} as RadarDiffs, { shape: 'diffs-1' })
@@ -37,10 +38,18 @@ const filter = atom({ plugin: 'radar', key: 'filter' } as const, { errors: false
 const since = atom({ plugin: 'radar', key: 'since' } as const, { content: '', at: 0 }, { shape: 'since-1' })
 // UI language; the stored choice ($.store 'lang') is loaded at session.start. Defaults to English.
 const lang = atom({ plugin: 'radar', key: 'lang' } as const, { l: 'en' as Lang }, { shape: 'lang-1' })
+// Last $.session.usage() reading; refreshed from events (turn.step, SubagentStop), never while drawing.
+const usage = atom({ plugin: 'radar', key: 'usage' } as const, { limits: [] } as RadarUsage, { shape: 'usage-1' })
+// Tokens per agent. main: summed from turn.step results of the main loop only; subs: $.agent.list() usage only, so no request counts twice.
+const ledger = atom({ plugin: 'radar', key: 'ledger' } as const, { main: [] as RadarRow[], subs: [] as RadarSpend[] }, { shape: 'ledger-1' })
+// Cross-session settings ($.store 'handoff' / 'cost'), loaded at session.start. handoff: tokens of context, 0 = off.
+const prefs = atom({ plugin: 'radar', key: 'prefs' } as const, { handoff: 0, cost: false }, { shape: 'prefs-1' })
+// True once the handoff toast fired for the current crossing; re-armed when usage drops below the threshold.
+const alert = atom({ plugin: 'radar', key: 'alert' } as const, { fired: false }, { shape: 'alert-1' })
 // Tab the lower box shows.
-type Tab = 'tasks' | 'procs' | 'files'
-const TABS: readonly Tab[] = ['tasks', 'procs', 'files']
-const tab = atom({ plugin: 'radar', key: 'tab' } as const, { tab: 'procs' as Tab }, { shape: 'tab-1' })
+type Tab = 'tasks' | 'procs' | 'files' | 'usage'
+const TABS: readonly Tab[] = ['tasks', 'procs', 'files', 'usage']
+const tab = atom({ plugin: 'radar', key: 'tab' } as const, { tab: 'procs' as Tab }, { shape: 'tab-2' })
 // Graph box share of the pane: large, balanced, small; i indexes SIZES.
 const SIZES = [0.6, 0.4, 0.25] as const
 const size = atom({ plugin: 'radar', key: 'size' } as const, { i: 1 }, { shape: 'size-1' })
@@ -290,10 +299,58 @@ const OPEN = { id: PANE, title: TITLE, backgroundColor: BG }
 // Controls are filled pills: cold slate at rest, accent when on; the selected tab and its strip share TAB.
 const CHIP = '#34404a', CHIP_INK = '#d5e3ee', CHIP_DIM = '#9fb2c2', INK = '#0b1d28', TAB = '#1f5f86'
 
+const SUB_CAP = 40
+
+/** Fires the handoff toast once per crossing. Call from events or handlers, never from a render. */
+async function checkHandoff($: EngineInterface) {
+  const [u, p, a, lg] = await Promise.all([read($, usage), read($, prefs), read($, alert), read($, lang)])
+  const used = u.ctx?.tokens
+  const over = p.handoff > 0 && used !== undefined && used >= p.handoff
+  if (over && !a.fired) {
+    await update($, alert, () => ({ fired: true }))
+    $.ui.toast(t(lg.l).toastHandoff(fmt(used), fmt(p.handoff)))
+  } else if (!over && a.fired) await update($, alert, () => ({ fired: false }))
+}
+
+/** Re-read context, rate limits, cost and per-agent tokens. A host without a ledger must not break the pane. */
+async function refresh($: EngineInterface) {
+  try {
+    const u = await $.session.usage()
+    const c = u.context
+    const pct = c.percent ?? (c.tokens !== undefined && c.window ? Math.round((c.tokens / c.window) * 100) : undefined)
+    await update($, usage, () => ({
+      ctx: c.tokens !== undefined && pct !== undefined ? { tokens: c.tokens, window: c.window, percent: pct } : undefined,
+      limits: (u.rateLimits ?? []).map(r => ({ kind: r.kind, pct: r.percentUsed, resets: r.resetsAt })),
+      usd: u.cost?.usd,
+    }))
+  } catch {}
+  try {
+    const list = await $.agent.list()
+    await update($, ledger, l => {
+      const seen = new Set(list.map(a => a.id))
+      const subs = l.subs.map(x => (seen.has(x.id) ? x : { ...x, done: true }))
+      for (const a of list) {
+        const rows = (a.usage ?? []).map(r => ({ m: r.model, i: r.input_tokens, o: r.output_tokens, r: r.cache_read_input_tokens, c: r.cache_creation_input_tokens }))
+        const next: RadarSpend = { id: a.id, type: a.type || 'agent', done: ['completed', 'failed', 'killed'].includes(a.taskStatus), rows, usd: a.cost?.usd }
+        const i = subs.findIndex(x => x.id === a.id)
+        // Keep the last known rows when the host reports none this time.
+        if (i < 0) subs.push(next)
+        else subs[i] = { ...next, rows: rows.length ? rows : subs[i]!.rows, usd: next.usd ?? subs[i]!.usd, done: next.done || subs[i]!.done }
+      }
+      return { ...l, subs: subs.slice(-SUB_CAP) }
+    })
+  } catch {}
+  try { await checkHandoff($) } catch {}
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const stored = await $.store.get('lang').catch(() => undefined)
     await update($, lang, () => ({ l: stored === 'es' ? 'es' : 'en' }))
+    const h = await $.store.get(HANDOFF_KEY).catch(() => undefined)
+    const c = await $.store.get(COST_KEY).catch(() => undefined)
+    await update($, prefs, () => ({ handoff: PRESETS.some(p => p === h) ? (h as number) : 0, cost: c === true }))
+    await refresh($)
     await $.command.register({ name: 'radar', description: t(stored === 'es' ? 'es' : 'en').cmdDesc })
     void $.ui.open(OPEN)
     return next(e)
@@ -312,7 +369,14 @@ export const register: Register = on => {
       await update($, models, m => ({ ...m, [key]: e.model }))
       if (e.agentId) await update($, agents, list => list.map(x => (x.id === e.agentId ? { ...x, model: e.model } : x)))
     }
-    return yield* next(e)
+    const res = yield* next(e)
+    // Main loop only: a subagent's requests reach the ledger through $.agent.list().
+    if (!e.agentId && res.usage) {
+      const u = res.usage
+      await update($, ledger, l => ({ ...l, main: addRow(l.main, { m: u.model, i: u.input_tokens, o: u.output_tokens, r: u.cache_read_input_tokens, c: u.cache_creation_input_tokens }) }))
+    }
+    await refresh($)
+    return res
   })
 
   on('classic.SubagentStart', async ($, e, next) => {
@@ -328,6 +392,8 @@ export const register: Register = on => {
 
   on('classic.SubagentStop', async ($, e, next) => {
     await update($, agents, list => list.map(a => (a.id === e.agent_id ? { ...a, isDone: true, tool: undefined } : a)))
+    await refresh($)
+    await update($, ledger, l => ({ ...l, subs: l.subs.map(a => (a.id === e.agent_id ? { ...a, done: true } : a)) }))
     return next(e)
   })
 
@@ -384,9 +450,10 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
-    const [ags, tks, cls, fls, mdl, dfs, opened, vw, sc, fd, pk, flt, snc, tb, sz, lg] = await Promise.all([
+    const [ags, tks, cls, fls, mdl, dfs, opened, vw, sc, fd, pk, flt, snc, tb, sz, lg, us, lgr, pf] = await Promise.all([
       read($, agents), read($, tasks), read($, calls), read($, files), read($, models), read($, diffs), read($, open), read($, view),
       read($, scroll), read($, fold), read($, pick), read($, filter), read($, since), read($, tab), read($, size), read($, lang),
+      read($, usage), read($, ledger), read($, prefs),
     ])
     const s = t(lg.l)
     const chip = (key: string, label: string, onPress: () => Promise<unknown>, lit = false) => (
@@ -402,7 +469,28 @@ export const register: Register = on => {
     const vector = e.surface !== 'terminal' && 'Svg' in ui ? ui : undefined
 
     const bodyRows = e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 45
-    const [hA, hB] = heights(bodyRows, SIZES[sz.i] ?? SIZES[1], fd.graph, fd.tabs)
+    // Meter strip: one row between the boxes, so it stays visible with the tabs box folded.
+    const ctx = us.ctx
+    const COL = { ok: ACCENT, hi: ACCENT_HI, err: ERR }
+    const hand = pf.handoff > 0 && ctx !== undefined && ctx.tokens >= pf.handoff
+    const lim = us.limits.map(r => ({ name: s.limit[r.kind] ?? r.kind, pct: Math.round(r.pct), resets: r.resets }))
+    const ctxTxt = (withBar: boolean) => (ctx ? `${withBar ? bar(ctx.percent, 6) + ' ' : ''}CTX ${ctx.percent}%` : '')
+    const tokTxt = ctx ? ` · ${fmt(ctx.tokens)}/${fmt(ctx.window)}` : ''
+    const stripLen = (b: boolean, k: boolean) => (hand ? s.handoffMark.length + 1 : 0) + ctxTxt(b).length + (k ? tokTxt.length : 0) + lim.reduce((n, l) => n + 3 + l.name.length + String(l.pct).length + 1, 0)
+    // Too wide: drop the bar first, then the token figures.
+    const showBar = stripLen(true, true) <= inner
+    const showTok = showBar || stripLen(false, true) <= inner
+    const meter = !ctx && !lim.length ? undefined : (
+      <Box flexDirection="row" paddingX={1} backgroundColor={hand ? TAB : BG}>
+        <Text maxLines={1}>
+          {hand ? <Text bold color={ACCENT_HI}>{s.handoffMark} </Text> : ''}
+          {ctx ? <Text color={COL[level(ctx.percent)]}>{ctxTxt(showBar)}</Text> : ''}
+          {ctx && showTok ? <Text color={DIM}>{tokTxt}</Text> : ''}
+          {lim.map(l => <Text color={COL[level(l.pct)]}>  {l.name} {l.pct}%</Text>)}
+        </Text>
+      </Box>
+    )
+    const [hA, hB] = heights(bodyRows - (meter ? 1 : 0), SIZES[sz.i] ?? SIZES[1], fd.graph, fd.tabs)
     const cur = TABS.includes(tb.tab) ? tb.tab : 'procs'
     // Tab body rows: border, tab bar and sub-header take 4.
     const win = Math.max(1, hB - 4)
@@ -608,11 +696,76 @@ export const register: Register = on => {
       </Box>
     )
 
+    // ---------- 5. usage ----------
+    const cycleHandoff = async () => {
+      const next = PRESETS[(PRESETS.findIndex(p => p === pf.handoff) + 1) % PRESETS.length] ?? 0
+      await $.store.set(HANDOFF_KEY, next)
+      await update($, prefs, p => ({ ...p, handoff: next }))
+      await update($, alert, () => ({ fired: false }))
+      await checkHandoff($)
+    }
+    const toggleCost = async () => {
+      await $.store.set(COST_KEY, !pf.cost)
+      await update($, prefs, p => ({ ...p, cost: !p.cost }))
+    }
+    const bw = Math.max(6, Math.min(20, inner - 24))
+    const dimTxt = (x: string) => <Text color={DIM} maxLines={1}>{x}</Text>
+    const sp = spenders(lgr.main, lgr.subs, s.main)
+    const biggest = Math.max(1, ...sp.map(x => sum(x.rows)))
+    const split = (r: RadarRow) => s.uSplit(fmt(r.i), fmt(r.o), fmt(r.r + r.c))
+    const money = (usd: number | undefined) => (pf.cost && usd !== undefined ? <Text color={DIM}> ≈${usd.toFixed(2)}</Text> : '')
+    // Main's share is the session total less the subagents', only when every subagent reports its own.
+    const subUsd = lgr.subs.every(a => a.usd !== undefined) ? lgr.subs.reduce((n, a) => n + (a.usd ?? 0), 0) : undefined
+    const mainUsd = us.usd !== undefined && subUsd !== undefined ? Math.max(0, us.usd - subUsd) : undefined
+    const usageLines: RenderChildren[] = [
+      label(s.uCtx, ACCENT_HI),
+      ctx
+        ? <Text maxLines={1}><Text color={COL[level(ctx.percent)]}>{bar(ctx.percent, bw)}</Text><Text color={SILK}> {ctx.percent}% · {fmt(ctx.tokens)} / {fmt(ctx.window)}</Text></Text>
+        : dimTxt(s.uNoCtx),
+      <Box flexDirection="row" gap={1}>
+        <Text color={DIM}>{s.uHandoff}</Text>
+        {chip('handoff-cycle', `⚑ ${pf.handoff ? presetLabel(pf.handoff) : s.off}`, cycleHandoff, pf.handoff > 0)}
+        {chip('cost-toggle', s.costBtn(pf.cost), toggleCost, pf.cost)}
+      </Box>,
+      label(s.uLimits, ACCENT_HI),
+      ...(lim.length
+        ? lim.map(l => {
+            const left = until(l.resets, Date.now())
+            return <Text maxLines={1}><Text color={SILK}>{l.name.padEnd(5)}</Text><Text color={COL[level(l.pct)]}>{bar(l.pct, 10)}</Text><Text color={SILK}> {l.pct}%</Text>{left ? <Text color={DIM}> · {s.uReset(left)}</Text> : ''}</Text>
+          })
+        : [dimTxt(s.uNoLimits)]),
+      label(s.uAgents, ACCENT_HI),
+      ...(sum(lgr.main) + lgr.subs.reduce((n, a) => n + sum(a.rows), 0) === 0
+        ? [dimTxt(s.uNoSpend)]
+        : sp.flatMap(x => {
+            const tot = sum(x.rows)
+            const all = x.rows.reduce((a, r) => addRow(a, { ...r, m: 'all' }), [] as RadarRow[])[0] ?? { m: '', i: 0, o: 0, r: 0, c: 0 }
+            return [
+              <Text maxLines={1}>
+                <Text color={ACCENT}>{bar((tot / biggest) * 100, 8)}</Text> <Text color={SILK}>{short(x.type, 14)}{x.n > 1 ? ` ×${x.n}` : ''}</Text>
+                <Text color={DIM}> {x.model}</Text> <Text bold color={ACCENT_HI}>{fmt(tot)}</Text>
+                {money(x.id === 'main' ? mainUsd : x.usd)}
+              </Text>,
+              dimTxt('  ' + split(all)),
+            ]
+          })),
+      label(s.uModels, ACCENT_HI),
+      ...byModel([lgr.main, ...lgr.subs.map(a => a.rows)]).map(({ m, row }) => (
+        <Text maxLines={1}><Text color={SILK}>{m.padEnd(10)}</Text> <Text bold color={ACCENT_HI}>{fmt(sum([row]))}</Text><Text color={DIM}>  {split(row)}</Text></Text>
+      )),
+      ...(pf.cost ? [label(s.uCost, ACCENT_HI), kv(s.uSession, us.usd !== undefined ? `≈$${us.usd.toFixed(2)}` : '—')] : []),
+    ]
+    const usageWin = Math.max(1, win)
+    const usageMax = Math.max(0, usageLines.length - usageWin)
+    const usageOff = Math.min(sc.usage, usageMax)
+
     // ---------- chrome: the board's language (hairline boxes, silkscreen headers) ----------
-    type Scroll = { title: RenderChildren; total: number; win: number; off: number; k: 'tasks' | 'procs' | 'det' | 'files'; body: RenderChildren }
+    type Scroll = { title: RenderChildren; total: number; win: number; off: number; k: 'tasks' | 'procs' | 'det' | 'files' | 'usage'; body: RenderChildren }
     const tabOf: Scroll =
       cur === 'tasks'
         ? { title: `J1 · ${s.tasks}`, total: tks.length, win: taskWin, off: taskOff, k: 'tasks', body: <Box flexDirection="column">{plan}{taskLines.slice(taskOff, taskOff + taskWin)}</Box> }
+        : cur === 'usage'
+          ? { title: `J4 · ${s.usage}`, total: usageLines.length, win: usageWin, off: usageOff, k: 'usage', body: <Box flexDirection="column">{usageLines.slice(usageOff, usageOff + usageWin)}</Box> }
         : cur === 'procs'
           ? inDetail
             ? { title: `J2 · ${s.proc} · ${short(top?.tool ?? '', inner - 20)}`, total: detailLines.length, win: procWin, off: detOff, k: 'det', body: procsBody }
@@ -635,8 +788,11 @@ export const register: Register = on => {
       tasks: tks.length ? <Text color={SILK}> {doneN}/{tks.length}</Text> : '',
       procs: [live.length ? <Text color={ACCENT}> ●{live.length}</Text> : '', errN ? <Text color={ERR}> ✕{errN}</Text> : ''],
       files: nEdit + nNew2 ? <Text color={SILK}> {nEdit + nNew2}</Text> : '',
+      usage: ctx ? <Text color={COL[level(ctx.percent)]}> {ctx.percent}%</Text> : '',
     }
-    const NAME: Record<Tab, string> = { tasks: s.tasks, procs: s.procs, files: s.files }
+    // Four tabs must fit ~46 columns: only the selected tab keeps its name, the rest show an icon and their badge.
+    const ICON: Record<Tab, string> = { tasks: '☰', procs: '⇄', files: '▤', usage: '◔' }
+    const NAME: Record<Tab, string> = { tasks: s.tasks, procs: s.procs, files: s.files, usage: s.usage }
     const tabBar = (
       <Box flexDirection="row" gap={1}>
         {chip('fold-tabs', fd.tabs ? '▸' : '▾', () => update($, fold, f => ({ ...f, tabs: !f.tabs })))}
@@ -644,7 +800,7 @@ export const register: Register = on => {
           <Box backgroundColor={t === cur && !fd.tabs ? TAB : CHIP} paddingX={1}>
             <Button key={`tab-${t}`} plain onPress={() => update($, tab, () => ({ tab: t }))}>
               <Text maxLines={1}>
-                <Text bold color={t === cur ? ACCENT_HI : CHIP_DIM}>{NAME[t]}</Text>
+                <Text bold color={t === cur ? ACCENT_HI : CHIP_DIM}>{t === cur ? NAME[t] : ICON[t]}</Text>
                 {BADGE[t]}
               </Text>
             </Button>
@@ -691,6 +847,7 @@ export const register: Register = on => {
           </Box>,
           fd.graph ? '' : graphBox,
         ])}
+        {meter ?? ''}
         {frame(hB, [tabBar, ...(fd.tabs ? [] : [subHeader, tabOf.body])])}
       </Box>
     )

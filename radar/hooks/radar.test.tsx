@@ -6,6 +6,7 @@ import { T } from './i18n'
 import { graphSvg, heights } from './register'
 import { planCells, planSvg } from './plan'
 import { pretty } from './model-name'
+import { fmt } from './usage'
 
 // The suite asserts the Spanish UI: every test starts with 'es' stored, as a user who picked it would.
 const test = (name: string, body: TestBody) => rawTest(name, ($, on) => { mock.store(on, { lang: 'es' }); return body($, on) })
@@ -345,9 +346,14 @@ test('tab badges count plan, running and failed calls, and touched files', async
   for (let i = 0; i < 50; i++) await Promise.resolve()
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    expect((await ui.find({ key: 'tab-tasks' }))?.text).toBe('TAREAS 1/2')
+    // Unselected tabs show an icon and their badge; the selected one its name.
+    expect((await ui.find({ key: 'tab-tasks' }))?.text).toBe('☰ 1/2')
     expect((await ui.find({ key: 'tab-procs' }))?.text).toBe('PROCESOS ●1 ✕1')
+    expect((await ui.find({ key: 'tab-files' }))?.text).toBe('▤ 2')
+    await ui.press({ key: 'tab-files' })
     expect((await ui.find({ key: 'tab-files' }))?.text).toBe('ARCHIVOS 2')
+    expect((await ui.find({ key: 'tab-procs' }))?.text).toBe('⇄ ●1 ✕1')
+    await ui.press({ key: 'tab-procs' })
     // Folded, the tab bar keeps its badges.
     await ui.press({ key: 'fold-tabs' })
     expect((await ui.find({ key: 'tab-procs' }))?.text).toBe('PROCESOS ●1 ✕1')
@@ -525,14 +531,23 @@ const boot = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1], sto
   base(on)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 }
-const labels = async (ui: { find: (q: { key: string }) => Promise<{ text: string } | null | undefined> }) =>
-  ['tab-tasks', 'tab-procs', 'tab-files'].map(async k => (await ui.find({ key: k }))?.text)
+// Only the selected tab shows its name: select each in turn and read it.
+type Finder0 = { find: (q: { key: string }) => Promise<{ text: string } | null | undefined>; press: (q: { key: string }) => Promise<unknown> }
+const labels = async (ui: Finder0) => {
+  const out: (string | undefined)[] = []
+  for (const k of ['tab-tasks', 'tab-procs', 'tab-files', 'tab-usage']) {
+    await ui.press({ key: k })
+    out.push((await ui.find({ key: k }))?.text)
+  }
+  await ui.press({ key: 'tab-procs' })
+  return out
+}
 
 rawTest('default language is English; lang-toggle switches the whole pane and back', async ($, on) => {
   await boot($, on)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect((await ui.find({ key: 'lang-toggle' }))?.props.label).toBe('EN')
-  expect(await Promise.all(await labels(ui))).toEqual(['TASKS', 'CALLS', 'FILES'])
+  expect(await labels(ui)).toEqual(['TASKS', 'CALLS', 'FILES', 'USAGE'])
   expect((await ui.find({ key: 'graph-toggle' }))?.props.label).toBe('⇄ Radar')
   await ui.press({ key: 'graph-toggle' })
   expect((await ui.find({ key: 'graph-toggle' }))?.props.label).toBe('⇄ Board')
@@ -541,11 +556,12 @@ rawTest('default language is English; lang-toggle switches the whole pane and ba
   expect(await ui.find({ type: 'Text', text: /J1 · TASKS/ })).toBeTruthy()
   await ui.press({ key: 'lang-toggle' })
   expect((await ui.find({ key: 'lang-toggle' }))?.props.label).toBe('ES')
-  expect(await Promise.all(await labels(ui))).toEqual(['TAREAS', 'PROCESOS', 'ARCHIVOS'])
+  expect(await labels(ui)).toEqual(['TAREAS', 'PROCESOS', 'ARCHIVOS', 'USO'])
   expect((await ui.find({ key: 'graph-toggle' }))?.props.label).toBe('⇄ Placa')
+  await ui.press({ key: 'tab-tasks' })
   expect(await ui.find({ type: 'Text', text: /SIN PLAN ACTIVO/ })).toBeTruthy()
   await ui.press({ key: 'lang-toggle' })
-  expect(await Promise.all(await labels(ui))).toEqual(['TASKS', 'CALLS', 'FILES'])
+  expect(await labels(ui)).toEqual(['TASKS', 'CALLS', 'FILES', 'USAGE'])
   await ui.unmount()
 })
 
@@ -563,7 +579,7 @@ rawTest('the language choice is kept in the store and survives a new session.sta
 rawTest('a stored language is used from the first draw', async ($, on) => {
   await boot($, on, { lang: 'es' })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await Promise.all(await labels(ui))).toEqual(['TAREAS', 'PROCESOS', 'ARCHIVOS'])
+  expect(await labels(ui)).toEqual(['TAREAS', 'PROCESOS', 'ARCHIVOS', 'USO'])
   await ui.unmount()
 })
 
@@ -584,4 +600,143 @@ rawTest('boardSvg and graphSvg texts follow the string set; both tables share th
   expect(graphSvg(FLEET0, [], 'claude-opus-5-5', T.es)).toContain('>Archivos<')
   const keys = (o: object): string[] => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? keys(v).map(x => `${k}.${x}`) : [k])).sort()
   expect(keys(T.es)).toEqual(keys(T.en))
+})
+
+// ---------- usage ----------
+const ctxOf = (tokens: number, window = 200_000) => ({ tokens, window, percent: Math.round((tokens / window) * 100) })
+const TU = (model: string, i: number, o: number, r: number, c: number) => ({ model, input_tokens: i, output_tokens: o, cache_read_input_tokens: r, cache_creation_input_tokens: c })
+const agentInfo = (id: string, type: string, model: string, usage: ReturnType<typeof TU>[], taskStatus = 'completed', usd?: number) =>
+  ({ id, description: '', type, status: taskStatus, kind: 'local_agent', taskStatus, label: '', startTime: 0, cwd: '/', model, tokenCount: 0, tokenSamples: [], hasRow: false, usage, ...(usd !== undefined ? { cost: { usd } } : {}) })
+
+/** Boots a session over mutable usage/agent mocks; `step()` fires a turn.step through the engine. */
+async function usageBoot($: Parameters<TestBody>[0], on: Parameters<TestBody>[1], stored: Record<string, unknown> = {}) {
+  const w = { usage: { startedAt: 0, context: { window: 200_000 } as Record<string, unknown>, rateLimits: [] as unknown[], cost: undefined as unknown }, agents: [] as unknown[], toasts: [] as string[], stepUsage: TU('claude-opus-5-5', 100, 50, 1000, 200) as unknown }
+  mock.store(on, { lang: 'es', ...stored })
+  base(on)
+  on('session.usage', () => ({ value: w.usage }) as never)
+  on('agent.list', () => ({ value: w.agents }) as never)
+  on('ui.toast', (_, e) => { w.toasts.push(e.text); return { value: undefined } })
+  on('turn.step', async function* () {
+    return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: w.stepUsage } as never
+  })
+  const step = async (agentId?: string) => {
+    const s = $.turn.step({ turnId: 't', index: 0, model: 'claude-opus-5-5', messageCount: 1, ...(agentId ? { agentId } : {}) })
+    for await (const _ of s) void _
+    return s.result
+  }
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  return { w, step }
+}
+
+rawTest('fmt: compact token counts', async () => {
+  expect([999, 1000, 12_300, 1_200_000, 999_960].map(fmt)).toEqual(['999', '1.0k', '12.3k', '1.2M', '1.0M'])
+})
+
+rawTest('meter strip shows context and rate limits only when reported', async ($, on) => {
+  const { w, step } = await usageBoot($, on)
+  let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /CTX/ })).toBeFalsy()
+  await ui.unmount()
+  w.usage.context = ctxOf(86_000)
+  await step()
+  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ type: 'Text', text: /CTX 43%/ }))?.text).toContain('CTX 43%')
+  expect((await ui.find({ type: 'Text', text: /86\.0k\/200\.0k/ }))?.text).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /5H|7D/ })).toBeFalsy()
+  expect((await ui.find({ key: 'tab-usage' }))?.text).toBe('◔ 43%')
+  await ui.unmount()
+  w.usage.rateLimits = [{ kind: 'five_hour', percentUsed: 20 }, { kind: 'seven_day', percentUsed: 61.4 }]
+  await step()
+  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ type: 'Text', text: /5H 20%/ }))?.text).toContain('7D 61%')
+  await ui.unmount()
+})
+
+rawTest('handoff: off by default, cycles, persists, toasts once per crossing', async ($, on) => {
+  const { w, step } = await usageBoot($, on)
+  w.usage.context = ctxOf(120_000)
+  await step()
+  let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /RELEVO/ })).toBeFalsy()
+  await ui.press({ key: 'tab-usage' })
+  expect((await ui.find({ key: 'handoff-cycle' }))?.props.label).toBe('⚑ OFF')
+  await ui.press({ key: 'handoff-cycle' })
+  expect((await ui.find({ key: 'handoff-cycle' }))?.props.label).toBe('⚑ 100k')
+  expect(await ui.find({ type: 'Text', text: /⚑ RELEVO/ })).toBeTruthy()
+  expect(w.toasts).toHaveLength(1)
+  await step()
+  await step()
+  expect(w.toasts).toHaveLength(1)
+  // Usage drops (compaction): re-armed, then a new crossing toasts again.
+  w.usage.context = ctxOf(20_000)
+  await step()
+  expect(await ui.find({ type: 'Text', text: /⚑ RELEVO/ })).toBeFalsy()
+  w.usage.context = ctxOf(130_000)
+  await step()
+  expect(w.toasts).toHaveLength(2)
+  await ui.unmount()
+  // A new session.start loads the stored choice.
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'tab-usage' })
+  expect((await ui.find({ key: 'handoff-cycle' }))?.props.label).toBe('⚑ 100k')
+  await ui.unmount()
+})
+
+rawTest('a stored handoff and cost choice load at session.start', async ($, on) => {
+  const { w } = await usageBoot($, on, { handoff: 150_000, cost: true })
+  w.usage.cost = { usd: 1.5 }
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'tab-usage' })
+  expect((await ui.find({ key: 'handoff-cycle' }))?.props.label).toBe('⚑ 150k')
+  expect((await ui.find({ key: 'cost-toggle' }))?.props.label).toBe('$ coste: ON')
+  await ui.unmount()
+})
+
+rawTest('USO tab: rows for main and subagents, totals by model, cost off until toggled', async ($, on) => {
+  const { w, step } = await usageBoot($, on)
+  w.usage.context = ctxOf(86_000)
+  w.usage.cost = { usd: 2 }
+  w.agents = [
+    agentInfo('a1', 'rapido', 'claude-haiku-5-5', [TU('claude-haiku-5-5', 1000, 500, 8000, 500)], 'completed', 0.5),
+    agentInfo('a2', 'rapido', 'claude-haiku-5-5', [TU('claude-haiku-5-5', 1000, 500, 8000, 500)], 'completed', 0.5),
+    agentInfo('a3', 'experto', 'claude-opus-5-5', [TU('claude-opus-5-5', 2000, 1000, 0, 0)], 'running', 0.25),
+  ]
+  await step() // main: 100 in, 50 out, 1000 read, 200 written = 1350
+  await step() // 2700
+  // A subagent step must not reach the main row: its figures come from agent.list().
+  await step('a3')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'tab-usage' })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  expect(texts.find(x => /principal.*Opus 5\.5.*2\.7k/.test(x))).toBeTruthy()
+  expect(texts.filter(x => /rapido ×2.*Haiku 5\.5.*20\.0k/.test(x))).toHaveLength(1)
+  expect(texts.find(x => /experto.*Opus 5\.5.*3\.0k/.test(x))).toBeTruthy()
+  expect(texts).toContain('  ent 200 · sal 100 · caché 2.4k')
+  // By model: Opus = main 2.7k + experto 3.0k; Haiku = 2 x 10.0k.
+  expect(texts.find(x => /^Opus 5\.5\s+5\.7k/.test(x))).toBeTruthy()
+  expect(texts.find(x => /^Haiku 5\.5\s+20\.0k/.test(x))).toBeTruthy()
+  expect(texts.some(x => /≈\$/.test(x))).toBe(false)
+  await ui.press({ key: 'cost-toggle' })
+  expect((await ui.findAll({ type: 'Text' })).some(t => /≈\$2\.00/.test(t.text))).toBe(true)
+  await ui.unmount()
+  // Persisted: a new session.start loads it back.
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await again.press({ key: 'tab-usage' })
+  expect((await again.find({ key: 'cost-toggle' }))?.props.label).toBe('$ coste: ON')
+  await again.unmount()
+})
+
+rawTest('USAGE tab renders in English and shows the empty states', async ($, on) => {
+  const { w, step } = await usageBoot($, on, { lang: 'en' })
+  w.usage.context = ctxOf(86_000)
+  await step()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'tab-usage' })
+  expect((await ui.find({ key: 'tab-usage' }))?.text).toBe('USAGE 43%')
+  expect(await ui.find({ type: 'Text', text: /RATE LIMITS/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /The host reports no rate limits/ })).toBeTruthy()
+  expect((await ui.find({ key: 'cost-toggle' }))?.props.label).toBe('$ cost: OFF')
+  await ui.unmount()
 })

@@ -1,6 +1,6 @@
 {
   "name": "radar",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "license": "MIT",
   "description": "Sidebar: animated agent graph, live tasks/tools with progress, and a tree of the files read, edited or created",
   "types": "./types/index.d.ts"
